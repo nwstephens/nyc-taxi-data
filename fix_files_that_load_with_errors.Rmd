@@ -1,0 +1,79 @@
+# Fix files that load with errors
+
+Some records in the raw data feed files have errors when loaded into postgres. Some records have too many fields. Problem records should be deleted then reloaded into postgres.
+
+These files have problematic records:
+
+    ./data/yellow_tripdata_2010-02.csv #1127 errors
+    ./data/yellow_tripdata_2010-03.csv #5684 errors
+
+## Hand inspection in bash
+
+There are too many problem records to be handled efficiently in bash. Nevertheless, here are some commands for doing inspections by hand.
+
+```{bash, eval=FALSE}
+# Problem files
+
+filename=./data/yellow_tripdata_2010-02.csv
+filename=./data/yellow_tripdata_2010-03.csv
+
+# Identify problem records in bash:
+
+sed -n '2957,2959p;2960q' $filename
+
+# Remove problem records in bash:
+
+sed -i '2958d' $filename
+```
+
+
+## Remove problem records with R
+
+Use `readr` to automatically remove problem records and write clean records to file.
+
+```{r, eval=FALSE}
+require(readr)
+
+dir.create('./data/fix')
+
+f02 <- tempfile()
+download.file('https://storage.googleapis.com/tlc-trip-data/2010/yellow_tripdata_2010-02.csv', f02)
+d02 <- read_csv(f02)
+length(unique(problems(d02)$row)) # 1127 errors
+write_csv(d02[-1, ], './data/fix/yellow_tripdata_2010-02.csv', na = "")
+
+f03 <- tempfile()
+download.file('https://storage.googleapis.com/tlc-trip-data/2010/yellow_tripdata_2010-03.csv', f03)
+d03 <- read_csv(f03)
+length(unique(problems(d03)$row)) # 5684 errors
+write_csv(d03[-1, ], './data/fix/yellow_tripdata_2010-03.csv', na = "")
+```
+
+
+## Reload files into postgres
+
+Attempt to reload clean files into the postgres db.
+
+```{bash, eval=FALSE}
+# Set database host name
+dbname=mydb
+
+# Set schema
+schema="(vendor_id,tpep_pickup_datetime,tpep_dropoff_datetime,passenger_count,trip_distance,pickup_longitude,pickup_latitude,rate_code_id,store_and_fwd_flag,dropoff_longitude,dropoff_latitude,payment_type,fare_amount,extra,mta_tax,tip_amount,tolls_amount,total_amount)"
+
+# Load yellow_tripdata_2010-02.csv
+filename=./data/fix/yellow_tripdata_2010-02.csv
+echo "`date`: beginning load for ${filename}"
+sed $'s/\r$//' $filename | sed '/^$/d' | psql nyc-taxi-data -c "COPY yellow_tripdata_staging ${schema} FROM stdin CSV HEADER;" -h $dbname
+echo "`date`: finished raw load for ${filename}"
+psql nyc-taxi-data -f populate_yellow_trips.sql -h $dbname
+echo "`date`: loaded trips for ${filename}"
+
+# Load yellow_tripdata_2010-03.csv
+filename=./data/fix/yellow_tripdata_2010-03.csv
+echo "`date`: beginning load for ${filename}"
+sed $'s/\r$//' $filename | sed '/^$/d' | psql nyc-taxi-data -c "COPY yellow_tripdata_staging ${schema} FROM stdin CSV HEADER;" -h $dbname
+echo "`date`: finished raw load for ${filename}"
+psql nyc-taxi-data -f populate_yellow_trips.sql -h $dbname
+echo "`date`: loaded trips for ${filename}"
+```
